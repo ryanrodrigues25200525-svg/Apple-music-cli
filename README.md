@@ -18,8 +18,6 @@ Muse requires macOS, Music.app, and AppleScript Automation permission for your t
 
 ### Homebrew
 
-After the first release and tap are published:
-
 ```sh
 brew tap ryanrodrigues25200525-svg/homebrew-tap
 brew install muse
