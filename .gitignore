@@ -1,0 +1,18 @@
+# Binaries and release output
+mu
+dist/
+build/
+
+# Go build/test output
+*.test
+coverage.out
+coverage.html
+
+# macOS/editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Local env/config
+.env
+.env.*

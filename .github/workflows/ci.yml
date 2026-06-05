@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Race Test
+        run: go test -race ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Vulnerability Scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - name: Build
+        run: go build -ldflags "-X github.com/ryanrodrigues25200525-svg/Apple-music-cli/cmd.Version=${{ github.ref_name }}" -o mu main.go

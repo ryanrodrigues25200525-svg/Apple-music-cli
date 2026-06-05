@@ -1,0 +1,55 @@
+version: 2
+
+project_name: muse
+
+builds:
+  - id: muse
+    main: ./main.go
+    binary: mu
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/ryanrodrigues25200525-svg/Apple-music-cli/cmd.Version={{.Version}}
+
+universal_binaries:
+  - id: mu-darwin-universal
+    ids:
+      - muse
+    replace: true
+
+archives:
+  - id: default
+    ids:
+      - mu-darwin-universal
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_universal"
+    files:
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+
+brews:
+  - name: muse
+    ids:
+      - default
+    repository:
+      owner: ryanrodrigues25200525-svg
+      name: homebrew-tap
+    homepage: "https://github.com/ryanrodrigues25200525-svg/Apple-music-cli"
+    description: "CLI, TUI, and MCP controller for Apple Music on macOS"
+    license: "MIT"
+    install: |
+      bin.install "mu"
+    test: |
+      system "#{bin}/mu", "version"
