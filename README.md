@@ -4,6 +4,8 @@ Muse is a terminal controller for Apple Music on macOS. It provides a fast CLI, 
 
 [![CI](https://github.com/ryanrodrigues25200525-svg/Apple-music-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanrodrigues25200525-svg/Apple-music-cli/actions/workflows/ci.yml)
 
+![Muse dashboard](docs/assets/dashboard.svg)
+
 ## Highlights
 
 - Control Music.app from the terminal with `mu`.
@@ -11,6 +13,27 @@ Muse is a terminal controller for Apple Music on macOS. It provides a fast CLI, 
 - Launch a Bubble Tea dashboard with keyboard controls.
 - Expose playback and library actions as MCP tools for agents.
 - Built for macOS with AppleScript, no Apple Music API credentials required.
+
+## Quick Start
+
+```sh
+brew tap ryanrodrigues25200525-svg/homebrew-tap
+brew install muse
+mu doctor
+mu
+```
+
+`mu` opens the interactive dashboard. Use `Space` to play or pause, `/` to search, and `q` to quit.
+
+## Screenshots
+
+| Dashboard | Playlists |
+| --- | --- |
+| ![Muse dashboard view](docs/assets/dashboard.svg) | ![Muse playlist browser](docs/assets/playlists.svg) |
+
+| JSON and MCP |
+| --- |
+| ![Muse JSON and MCP output](docs/assets/mcp-json.svg) |
 
 ## Install
 
@@ -31,11 +54,9 @@ brew upgrade muse
 
 ### GitHub Releases
 
-Download the latest macOS universal archive from:
+Download the latest macOS universal archive:
 
-```text
-https://github.com/ryanrodrigues25200525-svg/Apple-music-cli/releases/latest
-```
+[Latest release](https://github.com/ryanrodrigues25200525-svg/Apple-music-cli/releases/latest)
 
 Then unpack it and move `mu` into a directory on your `PATH`, such as `/usr/local/bin` or `~/.local/bin`.
 
@@ -70,7 +91,7 @@ make install
 
 ## Commands
 
-Playback:
+### Playback
 
 ```sh
 mu play
@@ -84,7 +105,7 @@ mu seek +30
 mu seek -10
 ```
 
-Library and metadata:
+### Library And Metadata
 
 ```sh
 mu now
@@ -102,7 +123,7 @@ mu stats --json
 mu love
 ```
 
-Playback modes and volume:
+### Playback Modes And Volume
 
 ```sh
 mu volume
@@ -112,14 +133,14 @@ mu repeat
 mu sleep 30
 ```
 
-Interactive modes:
+### Interactive Modes
 
 ```sh
 mu
 mu mini
 ```
 
-Diagnostics and shell integration:
+### Diagnostics And Shell Integration
 
 ```sh
 mu doctor
@@ -130,7 +151,9 @@ mu completion fish
 
 ## TUI
 
-Running `mu` opens the dashboard. Current keybindings include:
+Running `mu` opens the dashboard.
+
+Current keybindings:
 
 - `Space`: toggle playback
 - `n` / `p`: next / previous
@@ -142,7 +165,7 @@ Running `mu` opens the dashboard. Current keybindings include:
 - `/`: search
 - `q`: quit
 
-Screenshots or GIFs can be added under a future `docs/` or `assets/` directory.
+The dashboard includes now-playing details, progress, volume, shuffle/repeat/love state, playlist browsing, library search, lyrics, queue browsing, and a compact help footer.
 
 ## MCP
 
@@ -155,6 +178,17 @@ mu mcp
 Available tools include playback controls, `now_playing`, `search`, `play_song`, `play_playlist`, `play_playlist_shuffled`, `lyrics`, `queue`, `stats`, `love`, `shuffle`, `repeat`, `seek`, and `music_context`.
 
 Data-heavy tools return JSON text so agents can parse the response reliably.
+
+Example tools:
+
+- `now_playing`
+- `music_context`
+- `search`
+- `play_song`
+- `play_playlist_shuffled`
+- `lyrics`
+- `queue`
+- `seek`
 
 ## Troubleshooting
 
@@ -170,6 +204,14 @@ Common issues:
 - `osascript` is unavailable.
 - macOS Automation permission is missing. Open System Settings, Privacy & Security, Automation, then grant your terminal access to Music.app.
 - Lyrics require network access to `lrclib.net`.
+
+Useful checks:
+
+```sh
+mu doctor
+mu now --json
+mu playlists --json
+```
 
 ## Privacy And Security
 
