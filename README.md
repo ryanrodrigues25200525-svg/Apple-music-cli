@@ -175,7 +175,9 @@ Start the MCP server over stdio:
 mu mcp
 ```
 
-Available tools include playback controls, `now_playing`, `search`, `play_song`, `play_playlist`, `play_playlist_shuffled`, `lyrics`, `queue`, `stats`, `love`, `shuffle`, `repeat`, `seek`, and `music_context`.
+Available tools include playback controls, playlist management (`list_playlists`, `get_playlist_tracks`, `jump_to_track`, `create_playlist`, `add_to_playlist`, `remove_from_playlist`), playback state (`now_playing`, `get_queue`, `get_volume`, `shuffle_mode`, `repeat_mode`, `seek`, `fade_out`), library metadata (`get_song_info`, `get_lyrics`, `get_album`, `rate_song`, `love_song`, `dislike_song`), history (`get_recently_played`, `top_tracks`), and `music_context`.
+
+Some Apple Music surfaces are not reliably exposed through Music.app AppleScript. The MCP server advertises `get_recommendations`, `radio_mode`, `add_to_queue`, `add_to_library`, and `import_playlist` with explicit best-effort behavior or clear errors where the local scripting API cannot support the action.
 
 Data-heavy tools return JSON text so agents can parse the response reliably.
 
@@ -186,8 +188,9 @@ Example tools:
 - `search`
 - `play_song`
 - `play_playlist_shuffled`
-- `lyrics`
-- `queue`
+- `get_playlist_tracks`
+- `get_lyrics`
+- `get_queue`
 - `seek`
 
 ## Troubleshooting

@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // TrackInfo holds details about the currently playing track.
@@ -294,6 +296,77 @@ func Seek(delta float64) error {
 	return err
 }
 
+// SetPlayerPosition jumps to an absolute timestamp within the current song.
+func SetPlayerPosition(seconds float64) error {
+	if seconds < 0 {
+		seconds = 0
+	}
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	out, err := RunAppleScript(fmt.Sprintf(`
+		tell application "Music"
+			if not (exists current track) then return "NO_TRACK"
+			set player position to %f
+		end tell
+	`, seconds))
+	if err != nil {
+		return err
+	}
+	if out == "NO_TRACK" {
+		return fmt.Errorf("no current track")
+	}
+	return nil
+}
+
+// FadeOut gradually reduces Music.app volume to zero over the requested duration.
+func FadeOut(seconds float64) error {
+	if seconds <= 0 {
+		seconds = 5
+	}
+	startVolume, err := GetVolume()
+	if err != nil {
+		return err
+	}
+	steps := 20
+	if seconds < 2 {
+		steps = 10
+	}
+	delay := time.Duration(seconds * float64(time.Second) / float64(steps))
+	for i := 1; i <= steps; i++ {
+		nextVolume := startVolume - int(float64(startVolume)*float64(i)/float64(steps))
+		if err := SetVolume(nextVolume); err != nil {
+			return err
+		}
+		if i < steps {
+			time.Sleep(delay)
+		}
+	}
+	return nil
+}
+
+// SetShuffleMode enables or disables shuffle mode.
+func SetShuffleMode(enabled bool) error {
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	_, err := RunAppleScript(fmt.Sprintf(`tell application "Music" to set shuffle enabled to %t`, enabled))
+	return err
+}
+
+// SetRepeatMode sets repeat mode to off, one, or all.
+func SetRepeatMode(mode string) error {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "off" && mode != "one" && mode != "all" {
+		return fmt.Errorf("repeat mode must be off, one, or all")
+	}
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	_, err := RunAppleScript(fmt.Sprintf(`tell application "Music" to set song repeat to %s`, mode))
+	return err
+}
+
 // ToggleLove toggles the loved state of the current track and returns the new state.
 // Falls back gracefully for streaming tracks that may not support the loved property.
 func ToggleLove() (bool, error) {
@@ -317,6 +390,69 @@ func ToggleLove() (bool, error) {
 		return false, fmt.Errorf("loved is not supported for this track")
 	}
 	return out == "true", nil
+}
+
+// SetLove sets the loved state of the current track and returns the new state.
+func SetLove(loved bool) (bool, error) {
+	if err := EnsureMusicRunning(); err != nil {
+		return false, err
+	}
+	out, err := RunAppleScript(fmt.Sprintf(`
+		tell application "Music"
+			try
+				set loved of current track to %t
+				return loved of current track
+			on error
+				return "UNSUPPORTED"
+			end try
+		end tell
+	`, loved))
+	if err != nil {
+		return false, err
+	}
+	if out == "UNSUPPORTED" {
+		return false, fmt.Errorf("loved is not supported for this track")
+	}
+	return out == "true", nil
+}
+
+// DislikeCurrentTrack marks the current track as disliked when Music.app exposes that property.
+func DislikeCurrentTrack() error {
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	out, err := RunAppleScript(`
+		tell application "Music"
+			try
+				set loved of current track to false
+			end try
+			try
+				set disliked of current track to true
+				return "OK"
+			on error errText
+				return "ERROR|" & errText
+			end try
+		end tell
+	`)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(out, "ERROR|") {
+		return fmt.Errorf("disliked is not supported for this track: %s", strings.TrimPrefix(out, "ERROR|"))
+	}
+	return nil
+}
+
+// RateCurrentTrack sets the current track rating. Stars are 1-5 and map to Music.app's 20-100 scale.
+func RateCurrentTrack(stars int) error {
+	if stars < 1 || stars > 5 {
+		return fmt.Errorf("rating must be 1-5 stars")
+	}
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	_, err := RunAppleScript(fmt.Sprintf(`tell application "Music" to set rating of current track to %d`, stars*20))
+	return err
 }
 
 // NowPlaying returns full playback state including loved status.
@@ -781,6 +917,135 @@ func GetPlaylistTracks(playlistName string) ([]TrackInfo, error) {
 	return parsePlaylistTrackOutput(out)
 }
 
+// CreatePlaylist creates a new user playlist.
+func CreatePlaylist(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("playlist name is required")
+	}
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	out, err := RunAppleScript(fmt.Sprintf(`
+		tell application "Music"
+			try
+				if exists playlist "%s" then return "EXISTS"
+				make new user playlist with properties {name:"%s"}
+				return "OK"
+			on error errText
+				return "ERROR|" & errText
+			end try
+		end tell
+	`, escapeAS(name), escapeAS(name)))
+	if err != nil {
+		return err
+	}
+	if out == "EXISTS" {
+		return fmt.Errorf("playlist already exists: %s", name)
+	}
+	if strings.HasPrefix(out, "ERROR|") {
+		return fmt.Errorf("applescript: %s", strings.TrimPrefix(out, "ERROR|"))
+	}
+	return nil
+}
+
+// AddTrackToPlaylist duplicates the first matching library track into a playlist.
+func AddTrackToPlaylist(playlistName, query string) error {
+	playlistName = strings.TrimSpace(playlistName)
+	query = strings.TrimSpace(query)
+	if playlistName == "" || query == "" {
+		return fmt.Errorf("playlist name and query are required")
+	}
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	q := escapeAS(query)
+	out, err := RunAppleScript(fmt.Sprintf(`
+		tell application "Music"
+			try
+				if not (exists playlist "%s") then return "PLAYLIST_NOT_FOUND"
+				set targetTrack to missing value
+				set matches to (every track of library playlist 1 whose name contains "%s" or artist contains "%s" or album contains "%s")
+				if (count of matches) > 0 then set targetTrack to item 1 of matches
+				if targetTrack is missing value then return "TRACK_NOT_FOUND"
+				duplicate targetTrack to playlist "%s"
+				return "OK"
+			on error errText
+				return "ERROR|" & errText
+			end try
+		end tell
+	`, escapeAS(playlistName), q, q, q, escapeAS(playlistName)))
+	if err != nil {
+		return err
+	}
+	switch out {
+	case "PLAYLIST_NOT_FOUND":
+		return fmt.Errorf("playlist not found: %s", playlistName)
+	case "TRACK_NOT_FOUND":
+		return fmt.Errorf("no library track found matching: %s", query)
+	}
+	if strings.HasPrefix(out, "ERROR|") {
+		return fmt.Errorf("applescript: %s", strings.TrimPrefix(out, "ERROR|"))
+	}
+	return nil
+}
+
+// RemoveTrackFromPlaylist removes a matching track from a playlist. If index is positive,
+// it removes that 1-based position; otherwise it removes the first track matching query.
+func RemoveTrackFromPlaylist(playlistName, query string, index int) error {
+	playlistName = strings.TrimSpace(playlistName)
+	query = strings.TrimSpace(query)
+	if playlistName == "" {
+		return fmt.Errorf("playlist name is required")
+	}
+	if index <= 0 && query == "" {
+		return fmt.Errorf("query or 1-based index is required")
+	}
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	var selector string
+	if index > 0 {
+		selector = fmt.Sprintf(`
+				if %d > (count of tracks of p) then return "TRACK_NOT_FOUND"
+				delete track %d of p
+		`, index, index)
+	} else {
+		q := escapeAS(query)
+		selector = fmt.Sprintf(`
+				set matches to (every track of p whose name contains "%s" or artist contains "%s" or album contains "%s")
+				if (count of matches) is 0 then return "TRACK_NOT_FOUND"
+				delete item 1 of matches
+		`, q, q, q)
+	}
+	out, err := RunAppleScript(fmt.Sprintf(`
+		tell application "Music"
+			try
+				set matches to (every playlist whose name is "%s")
+				if (count of matches) is 0 then return "PLAYLIST_NOT_FOUND"
+				set p to item 1 of matches
+				%s
+				return "OK"
+			on error errText
+				return "ERROR|" & errText
+			end try
+		end tell
+	`, escapeAS(playlistName), selector))
+	if err != nil {
+		return err
+	}
+	switch out {
+	case "PLAYLIST_NOT_FOUND":
+		return fmt.Errorf("playlist not found: %s", playlistName)
+	case "TRACK_NOT_FOUND":
+		return fmt.Errorf("playlist track not found")
+	}
+	if strings.HasPrefix(out, "ERROR|") {
+		return fmt.Errorf("applescript: %s", strings.TrimPrefix(out, "ERROR|"))
+	}
+	return nil
+}
+
 // GetPlaylistTracksByPersistentID returns up to 100 tracks from a specific playlist.
 func GetPlaylistTracksByPersistentID(persistentID string) ([]TrackInfo, error) {
 	if err := EnsureMusicRunning(); err != nil {
@@ -1024,6 +1289,222 @@ func PlayPlaylistTrackAtIndexByPersistentID(persistentID string, index int) erro
 	}
 	if strings.HasPrefix(out, "ERROR") {
 		return fmt.Errorf("applescript error: %s", out)
+	}
+	return nil
+}
+
+// PlayPlaylistTrackAtIndex plays a specific 1-based track index within a named playlist.
+func PlayPlaylistTrackAtIndex(playlistName string, index int) error {
+	if strings.TrimSpace(playlistName) == "" {
+		return fmt.Errorf("playlist name is required")
+	}
+	if index <= 0 {
+		return fmt.Errorf("track index must be 1 or greater")
+	}
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	out, err := RunAppleScript(fmt.Sprintf(`
+		tell application "Music"
+			try
+				set matches to (every playlist whose name is "%s")
+				if (count of matches) is 0 then return "PLAYLIST_NOT_FOUND"
+				set p to item 1 of matches
+				if %d > (count of tracks of p) then return "TRACK_NOT_FOUND"
+				set targetTrack to item %d of tracks of p
+				set targetPID to persistent ID of targetTrack
+				repeat with attempt from 1 to 4
+					play targetTrack
+					delay 0.25
+					if (exists current track) and persistent ID of current track is targetPID then return "PLAYING"
+				end repeat
+				return "NO_CHANGE"
+			on error errText
+				return "ERROR|" & errText
+			end try
+		end tell
+	`, escapeAS(playlistName), index, index))
+	if err != nil {
+		return err
+	}
+	switch out {
+	case "PLAYLIST_NOT_FOUND":
+		return fmt.Errorf("playlist not found: %s", playlistName)
+	case "TRACK_NOT_FOUND":
+		return fmt.Errorf("playlist track not found")
+	case "NO_CHANGE":
+		return fmt.Errorf("could not play playlist track")
+	}
+	if strings.HasPrefix(out, "ERROR|") {
+		return fmt.Errorf("applescript: %s", strings.TrimPrefix(out, "ERROR|"))
+	}
+	return nil
+}
+
+// AddCurrentTrackToLibrary duplicates the current track into the library playlist when supported.
+func AddCurrentTrackToLibrary() error {
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	out, err := RunAppleScript(`
+		tell application "Music"
+			try
+				if not (exists current track) then return "NO_TRACK"
+				duplicate current track to library playlist 1
+				return "OK"
+			on error errText
+				return "ERROR|" & errText
+			end try
+		end tell
+	`)
+	if err != nil {
+		return err
+	}
+	if out == "NO_TRACK" {
+		return fmt.Errorf("no current track")
+	}
+	if strings.HasPrefix(out, "ERROR|") {
+		return fmt.Errorf("applescript: %s", strings.TrimPrefix(out, "ERROR|"))
+	}
+	return nil
+}
+
+// GetRecentlyPlayed returns tracks from Music.app's Recently Played playlist when present.
+func GetRecentlyPlayed(limit int) ([]TrackInfo, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if err := EnsureMusicRunning(); err != nil {
+		return nil, err
+	}
+	out, err := RunAppleScript(fmt.Sprintf(`
+		tell application "Music"
+			try
+				set matches to (every playlist whose name is "Recently Played")
+				if (count of matches) is 0 then return "NOT_FOUND"
+				set p to item 1 of matches
+				set sep to ASCII character 31
+				set nl to ASCII character 10
+				set output to ""
+				set total to count of tracks of p
+				if total > %d then set total to %d
+				repeat with i from 1 to total
+					set t to track i of p
+					set output to output & name of t & sep & artist of t & sep & album of t & nl
+				end repeat
+				return output
+			on error errText
+				return "ERROR" & (ASCII character 31) & errText
+			end try
+		end tell
+	`, limit, limit))
+	if err != nil {
+		return nil, err
+	}
+	return parsePlaylistTrackOutput(out)
+}
+
+// GetTopTracks returns the most-played library tracks.
+func GetTopTracks(limit int) ([]TrackStats, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if err := EnsureMusicRunning(); err != nil {
+		return nil, err
+	}
+	out, err := RunAppleScript(`
+		tell application "Music"
+			set sep to ASCII character 31
+			set nl to ASCII character 10
+			set output to ""
+			try
+				repeat with t in every track of library playlist 1
+					try
+						set output to output & (name of t) & sep & (artist of t) & sep & (album of t) & sep & (played count of t) & sep & (rating of t) & nl
+					end try
+				end repeat
+			on error errText
+				return "ERROR" & sep & errText
+			end try
+			return output
+		end tell
+	`)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(out, "ERROR"+recordSep) {
+		return nil, fmt.Errorf("applescript: %s", strings.TrimPrefix(out, "ERROR"+recordSep))
+	}
+	var tracks []TrackStats
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, recordSep, 5)
+		if len(parts) < 5 {
+			continue
+		}
+		playCount, _ := strconv.Atoi(parts[3])
+		rating, _ := strconv.Atoi(parts[4])
+		tracks = append(tracks, TrackStats{
+			Title:     parts[0],
+			Artist:    parts[1],
+			Album:     parts[2],
+			PlayCount: playCount,
+			Rating:    rating,
+		})
+	}
+	sort.SliceStable(tracks, func(i, j int) bool {
+		return tracks[i].PlayCount > tracks[j].PlayCount
+	})
+	if len(tracks) > limit {
+		tracks = tracks[:limit]
+	}
+	return tracks, nil
+}
+
+// PlayAlbumByName plays the first matching album from the local library.
+func PlayAlbumByName(query string) error {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return fmt.Errorf("album query is required")
+	}
+	if err := EnsureMusicRunning(); err != nil {
+		return err
+	}
+	q := escapeAS(query)
+	out, err := RunAppleScript(fmt.Sprintf(`
+		tell application "Music"
+			try
+				set matches to (every track of library playlist 1 whose album contains "%s")
+				if (count of matches) is 0 then return "NOT_FOUND"
+				set firstTrack to item 1 of matches
+				set albumName to album of firstTrack
+				set albumArtist to artist of firstTrack
+				set albumTracks to (every track of library playlist 1 whose album is albumName and artist is albumArtist)
+				if (count of albumTracks) is 0 then return "NOT_FOUND"
+				play item 1 of albumTracks
+				return "PLAYING"
+			on error errText
+				return "ERROR|" & errText
+			end try
+		end tell
+	`, q))
+	if err != nil {
+		return err
+	}
+	if out == "NOT_FOUND" {
+		return fmt.Errorf("no album found matching: %s", query)
+	}
+	if strings.HasPrefix(out, "ERROR|") {
+		return fmt.Errorf("applescript: %s", strings.TrimPrefix(out, "ERROR|"))
 	}
 	return nil
 }
